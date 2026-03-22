@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>MVRDV Aesthetic Architecture Viewer</title>
+    <style>
+        body { 
+            margin: 0; 
+            overflow: hidden; 
+            font-family: 'Segoe UI', sans-serif;
+            background: #ffffff; /* Crisp white vector background */
+        }
+        canvas { display: block; }
+        
+        #divider { 
+            position: absolute; 
+            left: 70%; top: 0; 
+            width: 2px; height: 100%; 
+            background: #e0e0e0; 
+            z-index: 10; 
+        }
+        
+        #title-3d, #title-2d { 
+            position: absolute; 
+            top: 20px; 
+            color: #333; 
+            text-transform: uppercase; 
+            letter-spacing: 2px; 
+            font-weight: 800; 
+            pointer-events: none;
+            background: rgba(255,255,255,0.7);
+            padding: 5px 10px;
+            border-radius: 4px;
+        }
+        #title-3d { left: 20px; }
+        #title-2d { left: calc(70% + 20px); }
+        #title-2d-subtitle {
+            position: absolute; 
+            left: calc(70% + 20px); 
+            top: 55px; 
+            color: #777; 
+            font-weight: 600; 
+            font-size: 12px;
+            pointer-events: none;
+            text-transform: uppercase;
+        }
+    </style>
+    <script async src="https://unpkg.com/es-module-shims@1.8.0/dist/es-module-shims.js"></script>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+          "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+          "lil-gui": "https://unpkg.com/lil-gui@0.19.1/dist/lil-gui.esm.js"
+        }
+      }
+    </script>
+</head>
+<body>
+    <div id="title-3d">MVRDV-Style Vector Axo</div>
+    <div id="title-2d">Overhead Plan</div>
+    <div id="title-2d-subtitle">Structural Blueprint Map</div>
+    <div id="divider"></div>
+    
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import GUI from 'lil-gui';
+
+        // 1. Initial MVRDV Aesthetic Setup
+        const scene = new THREE.Scene();
+        // Removed Fog and Background colors to enforce absolute white vector aesthetic
+
+        let frustumSize = 130;
+        const w = window.innerWidth;
+        const h = window.innerHeight;
+
+        // Camera 1: Parallel Axonometric
+        const axoAspect = (w * 0.7) / h;
+        const axoCamera = new THREE.OrthographicCamera(
+            -frustumSize * axoAspect / 2, frustumSize * axoAspect / 2, 
+            frustumSize / 2, -frustumSize / 2, -1000, 2000
+        );
+        axoCamera.position.set(100, 100, 100);
+        axoCamera.lookAt(0, 20, 0);
+        axoCamera.layers.set(0);
+
+        // Camera 2: Exact Top-Down Plan (+Y looking at -Y)
+        const planAspect = (w * 0.3) / h;
+        const planCamera = new THREE.OrthographicCamera(
+            -frustumSize * planAspect / 2, frustumSize * planAspect / 2, 
+            frustumSize / 2, -frustumSize / 2, -1000, 2000
+        );
+        planCamera.position.set(0, 500, 0);
+        planCamera.lookAt(0, 0, 0);
+        planCamera.layers.set(1);
+
+        // Renderer optimized for flat vector drawing
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(w, h);
+        renderer.shadowMap.enabled = false; // MVRDV illustrations typically have no soft raytraced shadows
+        renderer.autoClear = false; 
+        document.body.appendChild(renderer.domElement);
+
+        const controls = new OrbitControls(axoCamera, renderer.domElement);
+        controls.target.set(0, 20, 0);
+        controls.enableDamping = true;
+        controls.update();
+
+        // 2. Flat Graphic Material Palette (Exact hex sampling from vector illustration reference)
+        const makeMat = (color) => new THREE.MeshBasicMaterial({ color: color });
+        
+        const slabMat    = makeMat(0xf4f4f4); // Clean white/grey 
+        const coreMat    = makeMat(0xe6e7e8); // Light grey solid elements
+        const steelMat   = makeMat(0x58595b); // Dark grey technical structures
+        const trussMat   = makeMat(0xed1c24); // Bold Red
+        const vbracMat   = makeMat(0x0054a6); // Deep Blue
+        const stairMat   = makeMat(0x333333); // Dark contrasting stairs
+        
+        const personMat  = makeMat(0xec008c); // Iconic vibrant Magenta/Pink figures
+        const treeMat    = makeMat(0x00a651); // Vivid illustration green
+        const trunkMat   = makeMat(0x58595b);
+        
+        const groundMats = [
+            makeMat(0xf26522), // Orange paths
+            makeMat(0xffc20e), // Yellow fields
+            makeMat(0x8dc63f), // Lime green turf
+            makeMat(0x00a651)  // Dark green turf
+        ];
+
+        // The critical edge overlay elements that define vector aesthetics
+        const lineMat3D = new THREE.LineBasicMaterial({ color: 0xaaaaaa, linewidth: 1 }); // Soft gray for 3D edges
+        const lineMat2D = new THREE.LineBasicMaterial({ color: 0x111111, linewidth: 1 }); // Hard structural black for Plan view
+
+        let buildingGroup = new THREE.Group();
+        scene.add(buildingGroup);
+
+        // 3. Parametric System
+        const params = {
+            floors: 6,
+            width: 40,
+            depth: 40,
+            baseDensity: 1.0,
+            shuffle: function() { generatePavilion(); }
+        };
+
+        const fHeight = 8;
+        const sThick = 0.8;
+
+        // Dual Layer Poly-Renderer (Simulates boolean unions and contour tracking)
+        function addMeshWithLines(group, geo, mat, px, py, pz, rx=0, ry=0, rz=0) {
+            // Flat shaded face object
+            const mesh = new THREE.Mesh(geo, mat);
+            mesh.position.set(px, py, pz);
+            mesh.rotation.set(rx, ry, rz);
+            mesh.layers.set(0); 
+            group.add(mesh);
+            
+            // Generate topological contour edges
+            const edges = new THREE.EdgesGeometry(geo, 15); 
+            
+            // 3D vector overlay
+            const lineMesh0 = new THREE.LineSegments(edges, lineMat3D);
+            lineMesh0.position.set(px, py, pz);
+            lineMesh0.rotation.set(rx, ry, rz);
+            lineMesh0.layers.set(0);
+            group.add(lineMesh0);
+
+            // 2D isolated plan view layer
+            const lineMesh1 = new THREE.LineSegments(edges, lineMat2D);
+            lineMesh1.position.set(px, py, pz);
+            lineMesh1.rotation.set(rx, ry, rz);
+            lineMesh1.layers.set(1);
+            group.add(lineMesh1);
+            return mesh;
+        }
+
+        function addBox(group, w, h, dp, x, y, z, mat, rotZ=0, rotX=0) {
+            const geo = new THREE.BoxGeometry(w, h, dp);
+            return addMeshWithLines(group, geo, mat, x, y, z, rotX, 0, rotZ);
+        }
+
+        function addCyl(group, r, h, x, y, z, mat, rx=0, rz=0) {
+            const geo = new THREE.CylinderGeometry(r, r, h, 16);
+            return addMeshWithLines(group, geo, mat, x, y, z, rx, 0, rz);
+        }
+
+        function addPerson(x, y, z) {
+            const geo = new THREE.CylinderGeometry(0.3, 0.3, 1.8, 8);
+            addMeshWithLines(buildingGroup, geo, personMat, x, y + 0.9, z);
+        }
+
+        function addTree(x, y, z) {
+            const th = 2 + Math.random()*2;
+            addCyl(buildingGroup, 0.2, th, x, y + th/2, z, trunkMat);
+            // Low-poly Icosahedron perfectly matches vector illustrations
+            const leavesGeo = new THREE.IcosahedronGeometry(1.5 + Math.random()*2, 1);
+            addMeshWithLines(buildingGroup, leavesGeo, treeMat, x, y + th + 1, z);
+        }
+
+        function updateCameras() {
+            const totalHeight = params.floors * fHeight;
+            controls.target.set(0, totalHeight / 2, 0);
+            
+            // Center plan view on the building bounds
+            planCamera.position.set(0, totalHeight + 100, 0);
+            planCamera.lookAt(0, 0, 0);
+            
+            const maxDim = Math.max(params.width, params.depth, totalHeight);
+            frustumSize = maxDim + 50; // Increased padding to capture the landscape
+            onWindowResize(); 
+        }
+
+        function generatePavilion() {
+            scene.remove(buildingGroup);
+            buildingGroup = new THREE.Group();
+            scene.add(buildingGroup);
+
+            const numFloors = params.floors;
+            const bW = params.width;
+            const bD = params.depth;
+
+            // - - - PROCEDURAL VECTOR LANDSCAPE - - -
+            // Base white slab
+            addBox(buildingGroup, 280, 0.5, 280, 0, -0.25, 0, slabMat);
+            
+            // Vibrant overlapping organic fields (Abstract vector patches)
+            for(let i=0; i<30; i++) {
+                const r = 15 + Math.random() * 35;
+                const x = (Math.random() - 0.5) * 160;
+                const z = (Math.random() - 0.5) * 160;
+                const mat = groundMats[Math.floor(Math.random() * groundMats.length)];
+                addCyl(buildingGroup, r, 0.2, x, 0.1 + (i*0.01), z, mat); 
+            }
+
+            // Populate Landscape with flora & civilians
+            for(let i=0; i<120; i++){
+                const x = (Math.random() - 0.5) * 180;
+                const z = (Math.random() - 0.5) * 180;
+                if(Math.abs(x) < bW/2 + 2 && Math.abs(z) < bD/2 + 2) continue; // Hollow footprint beneath building
+                
+                if(Math.random() > 0.4) {
+                    addTree(x, 0.5, z);
+                } else {
+                    addPerson(x, 0.5, z);
+                }
+            }
+
+            // - - - STRUCTURAL GENERATION - - - 
+            // Slabs & Crowds
+            for(let i=0; i<=numFloors; i++){
+                const fy = i * fHeight;
+                addBox(buildingGroup, bW, sThick, bD, 0, fy, 0, slabMat);
+                
+                // Add pink people exploring every floor
+                const popCount = Math.floor(10 + Math.random() * 20);
+                for(let p=0; p<popCount; p++){
+                    const px = (Math.random() - 0.5) * (bW - 2);
+                    const pz = (Math.random() - 0.5) * (bD - 2);
+                    addPerson(px, fy + sThick/2, pz);
+                }
+                
+                // Add roof-top or balcony trees sporadically!
+                if(i > 0 && Math.random() > 0.3){
+                    const treeCount = Math.floor(Math.random() * 6);
+                    for(let t=0; t<treeCount; t++){
+                        const px = (Math.random() - 0.5) * (bW - 4);
+                        const pz = (Math.random() - 0.5) * (bD - 4);
+                        addTree(px, fy + sThick/2, pz);
+                    }
+                }
+            }
+
+            let lastStyle = -1;
+            for(let i=0; i<numFloors; i++){
+                const cy = i * fHeight + sThick/2 + (fHeight - sThick)/2;
+                const hh = fHeight - sThick; 
+                
+                // Pure random density variations between layers!
+                const dens = params.baseDensity * (0.3 + Math.random() * 1.5); 
+                
+                let style = Math.floor(Math.random() * 5);
+                while(style === lastStyle) style = Math.floor(Math.random() * 5);
+                lastStyle = style;
+
+                if(style === 0) { // Forest
+                    const count = Math.floor(35 * dens * (bW/40) * (bD/40));
+                    for(let k=0; k<count; k++){
+                        const rx = (Math.random() - 0.5) * (bW - 4);
+                        const rz = (Math.random() - 0.5) * (bD - 4);
+                        addCyl(buildingGroup, 0.4, hh, rx, cy, rz, trunkMat);
+                    }
+                }
+                else if(style === 1) { // Concrete Pots
+                    const offW = bW * 0.25;
+                    const offD = bD * 0.25;
+                    const r = Math.max(1, 3.5 * Math.sqrt(dens));
+                    addCyl(buildingGroup, r, hh, -offW, cy, -offD, coreMat);
+                    addCyl(buildingGroup, r, hh, offW, cy, -offD, coreMat);
+                    addCyl(buildingGroup, r, hh, -offW, cy, offD, coreMat);
+                    addCyl(buildingGroup, r, hh, offW, cy, offD, coreMat);
+                }
+                else if(style === 2) { // Heavy Grid
+                    const dX = Math.max(1, Math.round((bW/10) * dens));
+                    const dZ = Math.max(1, Math.round((bD/10) * dens));
+                    const useMat = Math.random() > 0.5 ? trussMat : groundMats[1]; // Red or Yellow Vector Grid
+                    
+                    for(let x=0; x<=dX; x++){
+                        for(let z=0; z<=dZ; z++){
+                            const px = -bW/2 + 2 + x * ((bW-4)/dX);
+                            const pz = -bD/2 + 2 + z * ((bD-4)/dZ);
+                            addBox(buildingGroup, 1.5, hh, 1.5, px, cy, pz, useMat);
+                        }
+                    }
+                }
+                else if(style === 3) { // Blue V-Braces
+                    const rows = Math.max(1, Math.round((bD/12) * dens));
+                    const cols = Math.max(1, Math.round((bW/10) * dens));
+                    for(let z=0; z<=rows; z++){
+                        const pz = -bD/2 + 2 + (rows===0?0:z * ((bD-4)/rows));
+                        for(let x=0; x<cols; x++){
+                            const startX = -bW/2 + x * (bW/cols) + (bW/(cols*2));
+                            const ang = 0.35;
+                            const hLen = hh / Math.cos(ang);
+                            addCyl(buildingGroup, 0.8, hLen, startX + 2, cy, pz, vbracMat, 0, ang);
+                            addCyl(buildingGroup, 0.8, hLen, startX - 2, cy, pz, vbracMat, 0, -ang);
+                        }
+                    }
+                }
+                else if(style === 4) { // Warren Trusses
+                    const rows = Math.max(1, Math.round((bD/20) * dens));
+                    const cols = Math.max(1, Math.round((bW/10) * dens));
+                    
+                    for(let s=0; s<rows; s++){
+                        const pz = (rows === 1) ? 0 : -bD/2 + 1 + s * ((bD-2)/(rows-1));
+                        for(let x=0; x<cols; x++){
+                            const px1 = -bW/2 + x*(bW/cols);
+                            const px2 = px1 + (bW/cols);
+                            const midX = (px1 + px2)/2;
+                            const diagLen = Math.sqrt(Math.pow(bW/(cols*2),2) + hh*hh);
+                            const ang = Math.atan2(hh, bW/(cols*2));
+                            addBox(buildingGroup, diagLen, 1.0, 1.0, (px1+midX)/2, cy, pz, trussMat, ang);
+                            addBox(buildingGroup, diagLen, 1.0, 1.0, (midX+px2)/2, cy, pz, trussMat, -ang);
+                        }
+                        for(let x=0; x<=cols; x++){
+                            const px = -bW/2 + x*(bW/cols);
+                            addBox(buildingGroup, 1.2, hh, 1.2, px, cy, pz, steelMat);
+                        }
+                    }
+                }
+            }
+
+            // Wrapping Grand Staircase
+            const stairW = Math.max(1.5, Math.min(4.5, bW * 0.15));
+            for(let i=0; i<numFloors; i++){
+                const side = i % 4; 
+                const yBottom = i * fHeight + sThick/2;
+                const yTop = (i+1) * fHeight - sThick/2;
+                const hh = Math.abs(yTop - yBottom);
+                const runLength = (side%2===0 ? bW : bD) + stairW; 
+                
+                const angle = Math.atan2(hh, runLength);
+                const flightLen = Math.sqrt(runLength*runLength + hh*hh);
+                
+                let sx, sz, rz, ry;
+                if(side === 0) { 
+                    sx = 0; sz = bD/2 + stairW/2;
+                    rz = angle; ry = 0;
+                } else if(side === 1) { 
+                    sx = bW/2 + stairW/2; sz = 0;
+                    rz = angle; ry = Math.PI/2;
+                } else if(side === 2) { 
+                    sx = 0; sz = -bD/2 - stairW/2;
+                    rz = angle; ry = Math.PI;
+                } else if(side === 3) { 
+                    sx = -bW/2 - stairW/2; sz = 0;
+                    rz = angle; ry = -Math.PI/2;
+                }
+                
+                const cy = (yBottom + yTop)/2;
+                const flightGeo = new THREE.BoxGeometry(flightLen, 0.4, stairW);
+                addMeshWithLines(buildingGroup, flightGeo, stairMat, sx, cy, sz, 0, ry, rz);
+                
+                // Scatter pink figures marching up the stairs!
+                for(let p=0; p<12; p++){
+                    const t = Math.random() - 0.5; // -0.5 to 0.5 along flight
+                    // Convert local flight space to global
+                    const localX = t * flightLen;
+                    const c = Math.cos(ry), s = Math.sin(ry);
+                    const pX = sx + localX * c;
+                    const pZ = sz - localX * s;
+                    const pY = cy + (t * (flightLen * Math.sin(rz)));
+                    addPerson(pX, pY + 0.2, pZ);
+                }
+            }
+            updateCameras();
+        }
+
+        // 5. GUI Hooks
+        const gui = new GUI({ title: 'Architectural Parameters' });
+        gui.add(params, 'floors', 2, 20, 1).name('Total Floors').onChange(generatePavilion);
+        gui.add(params, 'width', 15, 120, 1).name('Slab Width (X)').onChange(generatePavilion);
+        gui.add(params, 'depth', 15, 120, 1).name('Slab Depth (Z)').onChange(generatePavilion);
+        gui.add(params, 'baseDensity', 0.1, 3.0, 0.1).name('Base Density').onChange(generatePavilion);
+        gui.add(params, 'shuffle').name('Shuffle Design Topology');
+
+        generatePavilion();
+
+        // 6. Viewport Split Render Loop
+        window.addEventListener('resize', onWindowResize, false);
+        function onWindowResize() {
+            const w = window.innerWidth;
+            const h = window.innerHeight;
+            
+            const axAspect = (w * 0.7) / h;
+            axoCamera.left = -frustumSize * axAspect / 2;
+            axoCamera.right = frustumSize * axAspect / 2;
+            axoCamera.top = frustumSize / 2;
+            axoCamera.bottom = -frustumSize / 2;
+            axoCamera.updateProjectionMatrix();
+
+            const planAspect = (w * 0.3) / h;
+            planCamera.left = -frustumSize * planAspect / 2;
+            planCamera.right = frustumSize * planAspect / 2;
+            planCamera.top = frustumSize / 2;
+            planCamera.bottom = -frustumSize / 2;
+            planCamera.updateProjectionMatrix();
+
+            renderer.setSize(w, h);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+
+            const w = window.innerWidth;
+            const h = window.innerHeight;
+
+            renderer.clear();
+
+            // Render Left Viewport: Axonometric Vector Shade
+            renderer.setViewport(0, 0, w * 0.7, h);
+            renderer.setScissor(0, 0, w * 0.7, h);
+            renderer.setScissorTest(true);
+            renderer.setClearColor(0xffffff, 1); 
+            renderer.render(scene, axoCamera);
+
+            // Render Right Viewport: True Orthographic Plan Drawing
+            renderer.setViewport(w * 0.7, 0, w * 0.3, h);
+            renderer.setScissor(w * 0.7, 0, w * 0.3, h);
+            renderer.setScissorTest(true);
+            renderer.setClearColor(0xf6f6f8, 1);
+            renderer.render(scene, planCamera);
+        }
+        animate();
+    </script>
+</body>
+</html>
